@@ -50,38 +50,40 @@ sample_data = spatial_calibration(analysis_sample);
 distperpix = sample_data.distancePerPixel;
 
 savepath = uigetdir(pwd,'Select folder to save results to')
-
+beadNum = 32;
 if sample_data.multibead 
     temp_size = size(sample_data.split);
     n_beads = temp_size(1);
-
-    beadNum = 1;
 
     for i = 1:n_beads
         current_bead = sample_data.split{i};
 
         %Apply canny edge detection
         %edges =  edge(current_bead,'Canny',[0.35 0.75],25);
-        edges =  edge(current_bead,'Canny',[0.4 0.65],35);
+        edges =  edge(current_bead,'Canny',[0.4 0.5],35);
 
         fig1 = figure
         imshow(edges);
         beadName = strcat('Bead',num2str(beadNum));
         filepath = strcat(savepath,'\',beadName)
         saveas(fig1,strcat(filepath,' Edges.png'))
+        beadDigitization(edges,distperpix,filepath,beadNum);
         beadNum = beadNum + 1;
 
-        beadDigitization(edges,distperpix,filepath);
     end
 else
     %Apply canny edge detection
-    edges =  edge(analysis_sample,'Canny',[0.65 0.75],35);
+    %analysis_sample = imrotate(analysis_sample,-90)
+    edges =  edge(analysis_sample,'Canny',[0.05 0.75],35);
     %edges =  edge(analysis_sample,'Canny',[0.4 0.65],35)
+    imshow(analysis_sample);
 
-    figure
+    fig1 = figure
     imshow(edges);
-
-    beadDigitization(edges,distperpix,filepath)
+    beadName = strcat('Bead',num2str(beadNum))
+    filepath = strcat(savepath,'\',beadName)
+    saveas(fig1,strcat(filepath,' Edges.png'))
+    [imcoords] = beadDigitization(edges,distperpix,filepath,beadNum)
     
 end
 
@@ -89,19 +91,14 @@ end
 %Functions
 %%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
  
-function [] = beadDigitization(edges, distperpix,filepath)
+function [imcoords] = beadDigitization(edges, distperpix,filepath,beadNum)
+tablepath = 'C:\Users\emiramon\Documents\Data\Dataset 4\Start end points.csv'
+startEndPts = readtable(tablepath);
+startPts = startEndPts.Start;
+endPts = startEndPts.End;
+
 %Get coordinates of boundary in user specified units
 [imcoords.x, imcoords.y] = binary_coordinates(edges,distperpix);
-
-%Plot digitized bead outline
-fig2 = figure
-fig2.Position(3:4) = [1900 400]
-scatter(imcoords.x,imcoords.y)
-title('Digitized Bead Outline')
-xlabel('X distance (mm)')
-ylabel('Y distance (mm)')
-
-hold on
 
 %Invert binary image 
 I = double(~edges);
@@ -112,88 +109,242 @@ I = double(~edges);
 [skeletonImage,fluxImage,distImage] = extract2DSkeletonFromBinaryImage(skeletonImage);
 
 %Get coordinates of binary topological skeleton 
-[x_cent,y_cent] = binary_coordinates(skeletonImage,distperpix);
+skelPoints = [];
+[skelPoints(1,:),skelPoints(2,:)] = binary_coordinates(skeletonImage,distperpix);
+
+
+%Compute end point for center line on right side 
+x_max = max(imcoords.x);
+x_min = min(imcoords.x);
+idx_max = find(imcoords.x == x_max(1));
+mid_idx = round((idx_max(end) + idx_max(1))/2);
+y_max = imcoords.y(mid_idx);
+
+if isempty(find(skelPoints(1,:) == x_min))
+    %Compute end point for center line on left side 
+    idx_min = find(imcoords.x == x_min);
+    mid_idx = round((idx_min(end) + idx_min(1))/2);
+    y_min = imcoords.y(mid_idx);
+end
+
 %Downsample the line to smooth out unwanted peaks and valleys
-[x_cent,y_cent] = downsample(x_cent,y_cent,10);
+skelPoints = downsample(skelPoints(1,:),skelPoints(2,:),5);
+skelPoints(1,end) = x_max(1);
+skelPoints(2,end) = y_max;
+skelPoints(1,1) = x_min(1);
+skelPoints(2,1) = y_min;
 
 %Use Pchip interpolation to create smooth line running through the
 %downsampled topological skeleton 
-xq = 0:0.1:max(imcoords.x);
-pp = pchip(x_cent,y_cent,xq);
-plot(xq,pp);
+centerLinePoints = [];
+centerLinePoints(1,:) = min(imcoords.x):0.05:max(imcoords.x);
+centerLinePoints(2,:) = pchip(skelPoints(1,:),skelPoints(2,:),centerLinePoints(1,:));
 
-%Define endcap cutoff distance in mm 
-start_cutoff = 4.5;
-end_cutoff = max(xq)-4.5;
-cutoffs = [start_cutoff,end_cutoff];
 
+%Compute ideal center line 
+[y_ctr,angle] = ideal_centerline(centerLinePoints);
+idealCtrLinePts = [centerLinePoints(1,:);y_ctr];
+
+%Calculate transformation matrix and apply transformation to rotate
+%misaligned beads so that ideal center line is parallel to x axis
+impoints = [imcoords.x.';imcoords.y.'];
+T = [cosd(angle),sind(angle);-sind(angle), cosd(angle)];
+impoints = T*impoints;
+imcoords.x = impoints(1,:);
+imcoords.y = impoints(2,:);
+clear impoints
+
+centerLinePoints = T*centerLinePoints;
+idealCtrLinePts = T*idealCtrLinePts;
+skelPoints = T*skelPoints;
+startPts = T(1,1)*startPts;
+endPts = T(1,1)*endPts;
+
+%Shift points so that bead and centerline start at 0 
+% xmin = min(imcoords.x);
+% imcoords.x = imcoords.x - xmin;
+% startPts = startPts - xmin;
+% endPts = endPts - xmin;
+% skelPoints(1,:) = skelPoints(1,:) - xmin;
+% centerLinePoints(1,:) = centerLinePoints(1,:) - xmin;
+% idealCtrLinePts(1,:) = idealCtrLinePts(1,:) - xmin;
+
+
+%Plot digitized bead outline
+fig2 = figure
+fig2.Position(3:4) = [1900 400];
+scatter(imcoords.x,imcoords.y)
+title('Digitized Bead Outline')
+xlabel('X distance (mm)')
+ylabel('Y distance (mm)')
+
+hold on
+%Plot center line 
+scatter(skelPoints(1,:),skelPoints(2,:));
+hold on
+plot(centerLinePoints(1,:),centerLinePoints(2,:));
 %Plot ideal centerline 
 hold on
-y_ctr = ideal_centerline(xq,pp);
-plot(xq,y_ctr)
-
+plot(idealCtrLinePts(1,:),idealCtrLinePts(2,:))
 saveas(fig2,strcat(filepath,' Outline+Centerline.png'))
 
-%Get width profile and plot
-[width, start_idx, end_idx] = get_width(cutoffs,xq,pp,imcoords);
-width = width.'
-length = xq(start_idx:end_idx).';
+%Get width profile 
+cutoffs(1) = startPts(beadNum);
+cutoffs(2) = endPts(beadNum);
+[Width, start_idx, end_idx] = get_width(cutoffs,centerLinePoints,imcoords);
+Width = Width.';
+Length = centerLinePoints(1,start_idx:end_idx).';
+
+%Shift length so it starts at 0 
+minLength = min(Length)
+Length = Length - minLength;
+
+%Plot width
 fig3 = figure
-plot(length,width)
+plot(Length,Width)
 xlabel('Length (mm)')
 ylabel('Width (mm)')
 
+%Compute deviation of actual center line from ideal center line 
+CenterLineDeviation = ctr_line_deviation(centerLinePoints,idealCtrLinePts);
+CenterLineDeviation = CenterLineDeviation(start_idx:end_idx)
+disp(length(CenterLineDeviation))
+disp(length(Width))
+disp(length(Length))
+
 saveas(fig3,strcat(filepath,' Width.png'));
-T = table(length,width)
+T = table(Length,Width,CenterLineDeviation.');
 writetable(T, strcat(filepath, ' Width Profile.csv'))
 
 
 end
 
 
-function y_ctr = ideal_centerline(xq,pp)
+function [y_ctr, angle] = ideal_centerline(centerLinePoints)
 
-y_ctr = pp(1)*ones(1,length(xq));
+xq = centerLinePoints(1,:);
+pp = centerLinePoints(2,:);
 
+m = (pp(end) - pp(1))/(xq(end) - xq(1));
+y_ctr = m * (xq - xq(1)) + pp(1);
+
+angle = atand(m);
 
 end
 
-function std = ctr_line_deviation(pp,xq)
+function difference = ctr_line_deviation(centerLinePoints,idealCtrLinePts)
 
+difference = centerLinePoints(2,:) - idealCtrLinePts(2,:);
 
 end
 
-function [width, start_idx, end_idx] = get_width(cutoffs,xq,pp,imcoords)
+function [width, start_idx, end_idx] = get_width(cutoffs,centerLinePoints,imcoords)
+
+xq = centerLinePoints(1,:);
+pp = centerLinePoints(2,:);
+
 [minstart, start_idx] = min(abs(xq - cutoffs(1)));
 [minend, end_idx] = min(abs(xq - cutoffs(2)));
 
 j = 1;
 
-for i = start_idx:end_idx 
+  for i = start_idx:end_idx 
  
     diff = imcoords.x - xq(i);
-    [x_min, first_idx] = min(abs(diff));
+    [sortedDiff,sortedIdx] = sort(abs(diff));
+    xmin = sortedDiff(1);
+    first_idx = sortedIdx(1);
     idx = find(imcoords.x == imcoords.x(first_idx));
     
-    for k = 1:length(idx)
-     
-        if imcoords.y(idx(k)) > pp(i) && length(idx) > 1
-            y_high(j) = imcoords.y(idx(k));
-        elseif imcoords.y(idx(k)) < pp(i) && length(idx) > 1
-            y_low(j) = imcoords.y(idx(k));
+    %Boolean that stores info on whether current index is above or below
+    %centerline. Above is true, below is false 
+    
+    if length(idx) > 2
+
+        yvals = imcoords.y(idx);
+        yhighsidx = find(yvals > pp(i));
+        ylowsidx = find(yvals < pp(i));
+
+        yhighs = yvals(yhighsidx)
+        newyhigh = min(yhighs)
+        newhighidx = find(yvals == newyhigh)
+
+        ylows = yvals(ylowsidx)
+        newylow = max(ylows)
+        newlowidx = find(yvals == newylow)
+        
+        idx = [idx(newhighidx) idx(newlowidx)]
+ 
+    end
+
+    for n = 1:length(idx)
+
+        direction = false;
+        if imcoords.y(idx(n)) > pp(i)
+            y_high(j) = imcoords.y(idx(n));
+            direction = true;
+        elseif imcoords.y(idx(n)) < pp(i)
+            y_low(j) = imcoords.y(idx(n));
         end
         
+        found = false;
+
+        if length(idx) > 1
+            found = true;
+        end
+
+        newDirection = false;
+        k = 2;
+    
+        while (found == false)
+    
+            second_idx = sortedIdx(k);
+            testValY = imcoords.y(second_idx);
+    
+            if (testValY > pp(i))
+                newDirection = true;
+            else
+                newDirection = false;
+            end
+    
+            if (direction ~= newDirection)
+                found = true;
+            end
+    
+            k = k + 1;
+    
+        end
+    
+        if newDirection && length(idx) == 1 
+            y_high(j) = testValY;
+            j = j + 1;
+        elseif newDirection == false && length(idx) == 1
+            y_low(j) = testValY;
+            j = j + 1;
+        elseif n == 2
+            j = j + 1;
+        end
+
     end
 
-    if length(idx) > 1
-        j = j + 1;
-    else
-        xq(i) = [];
-        end_idx = end_idx - 1;
-        
-    end
+
+%     for k = 1:length(idx)
+%      
+%         if imcoords.y(idx(k)) > pp(i) && length(idx) > 1
+%             y_high(j) = imcoords.y(idx(k));
+%         elseif imcoords.y(idx(k)) < pp(i) && length(idx) > 1
+%             y_low(j) = imcoords.y(idx(k));
+%         end        
+%     end
+% 
+%     if length(idx) > 1
+%         j = j + 1;
+%     else
+%         xq(i) = [];
+%         end_idx = end_idx - 1;
+%         
+%     end
 end
-
 width = y_high - y_low;
 end
 
@@ -211,11 +362,9 @@ y = row*distperpix;
 x = col*distperpix;
 
 %Shift all x values by the minimum x to make plot start at x = 0 
-xmin = min(x);
-x = x - xmin; 
 end
 
-function [x_new,y_new] = downsample(x,y,spacing)
+function newSkel = downsample(x,y,spacing)
 %Downsample
 x_new = [];
 y_new = [];
@@ -229,6 +378,11 @@ for i = 1:length(x)-1
 end
 x_new(end) = x(end);
 y_new(end) = y(end);
+
+newSkel = [];
+newSkel(1,:) = x_new;
+newSkel(2,:) = y_new;
+
 end
 
 function [x_new,y_new] = thin_centerline(x,y)
