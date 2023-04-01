@@ -35,18 +35,12 @@ set(gcf, 'units','normalized','outerposition',[0 0 1 1]);
 % Give a name to the title bar.
 set(gcf,'name','Demo by ImageAnalyst','numbertitle','off')
 
-message = sprintf('Begin Spatial Calibration?');
-reply = questdlg(message, 'Calibrate spatially', 'OK', 'Cancel', 'OK');
-if strcmpi(reply, 'Cancel')
-	% User said Cancel, so exit.
-	return;
-end
-button = 1; % Allow it to enter loop.
+button = 99;
 
-while button ~= 4
+while button ~= 6
 	if button > 1
 		% Let them choose the task, once they have calibrated.
-		button = menu('Select a task', 'Calibrate', 'Measure Distance','Split Beads','Exit');
+		button = menu('Select a task', 'Manual Calibration','External Calibration', 'Measure Distance','Split Beads','Speed Override','Exit');
 	end
 	switch button
 		case 1
@@ -60,12 +54,19 @@ while button ~= 4
 			% for the task on the next time through the loop.
 			button = 99;
 		case 2
-			DrawLine();
-
+            output = ExternalCalibration();
+			
         case 3
+            DrawLine();            
+
+        case 4
 
             output = SplitBeads(originalImage, output);
 
+        case 5
+            output.units = 'mm';
+	        output.distancePerPixel = 0.047256;
+            output.multibead = false
         otherwise
            
 			close(figureHandle);
@@ -95,7 +96,7 @@ try
 	userPrompt = {'Enter real world units (e.g. microns):','Enter distance in those units:'};
 	dialogTitle = 'Specify calibration information';
 	numberOfLines = 1;
-	def = {'microns', '500'};
+	def = {'mm', '500'};
 	answer = inputdlg(userPrompt, dialogTitle, numberOfLines, def);
 	if isempty(answer)
 		return;
@@ -121,6 +122,25 @@ end
 
 return;	% from Calibrate()
 end
+
+function calibration = ExternalCalibration()
+
+% Ask the user for the pixel calibration from external source 
+userPrompt = {'Enter pixel calibration from external source (units/pixel): ',
+    'Enter distance units: '};
+dialogTitle = 'Specify calibration information';
+numberOfLines = 1;
+def = {'0.05', 'mm'};
+answer = inputdlg(userPrompt, dialogTitle, numberOfLines, def);
+
+calibration.units = answer{2};
+calibration.distancePerPixel = str2double(answer{1})
+calibration.multibead = false
+
+return;
+
+end
+
 
 %=====================================================================
 % --- Executes on button press in DrawLine.
@@ -207,18 +227,20 @@ newUser = false;
 
 % Ask for mode.
 
-message = sprintf('Select New User if you do not know how to use this tool.');
-reply = questdlg(message, 'Mode', 'Quick', 'New User', 'Debug', 'Quick');
+% message = sprintf('Select New User if you do not know how to use this tool.');
+% reply = questdlg(message, 'Mode', 'Quick', 'New User', 'Debug', 'Quick');
+% 
+% switch reply
+% 	case 'Quick'
+% 		quick = true;
+% 	case 'New User'
+% 		newUser = true;
+% 	case 'Debug'
+% 		debug = true;
+% end
 
-switch reply
-	case 'Quick'
-		quick = true;
-	case 'New User'
-		newUser = true;
-	case 'Debug'
-		debug = true;
-end
-
+%Hard coded for speed during debugging
+quick = true 
 
 % Initial image display.
 
@@ -229,18 +251,18 @@ title('Original Multi-Bead Image', 'FontSize', fontSize);
 set(gcf, 'units', 'normalized', 'outerposition', [0 0 1 1]);
 
 % Ask about orientation of the image.
-message = sprintf('Is the image oriented with the bead length going left to right (horizontal)?');
-reply = questdlg(message, 'Orientation', 'Yes', 'No', 'Yes');
-
-if strcmpi(reply, 'No')
-	% For ease of use, the program will now auto rotate the image.
-	multibead = imrotate(multibead, -90);
-    hold off
-	% Show new image.
-	imshow(multibead, []);
-	axis on;
-	title('Reoriented Multi-Bead Image', 'FontSize', fontSize);
-end
+% message = sprintf('Is the image oriented with the bead length going left to right (horizontal)?');
+% reply = questdlg(message, 'Orientation', 'Yes', 'No', 'Yes');
+% 
+% if strcmpi(reply, 'No')
+% 	% For ease of use, the program will now auto rotate the image.
+% 	multibead = imrotate(multibead, -90);
+%     hold off
+% 	% Show new image.
+% 	imshow(multibead, []);
+% 	axis on;
+% 	title('Reoriented Multi-Bead Image', 'FontSize', fontSize);
+% end
 
 % Prompt for number of beads.
 userPrompt = {'Enter the number of individual beads in the image:'};
@@ -363,8 +385,8 @@ imshow(sampleImage, []);
 axis on;
 title('Sample Result', 'FontSize', fontSize);
 
-message = sprintf('Does this sample look correct? (This is the first image, if the image was truncated, the top may be cut short. This is normal.)'); 
-reply = questdlg(message, 'Sample Result', "Yes", 'No', 'Yes');
+% message = sprintf('Does this sample look correct? (This is the first image, if the image was truncated, the top may be cut short. This is normal.)'); 
+% reply = questdlg(message, 'Sample Result', "Yes", 'No', 'Yes');
 
 message = sprintf('Are there any samples you want to omit from the dataset?')
 reply = questdlg(message,'Omit Samples?','Yes','No','Yes')
@@ -387,13 +409,15 @@ if strcmpi(reply,'Yes')
     
 end
 
-message = sprintf('Are you satisfied with the results?')
-reply = questdlg(message, 'Exit Splitter', "Yes", 'No', 'Yes');
+% message = sprintf('Are you satisfied with the results?')
+% reply = questdlg(message, 'Exit Splitter', "Yes", 'No', 'Yes');
+% 
+% if strcmpi(reply, 'Yes')
+% 	% The user is satisfied with the result. End loop.
+% 	success = true;
+% end
 
-if strcmpi(reply, 'Yes')
-	% The user is satisfied with the result. End loop.
-	success = true;
-end
+success = true;
 
 debug = false;
 quick = false;
