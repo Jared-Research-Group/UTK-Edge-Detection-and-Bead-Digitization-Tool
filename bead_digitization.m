@@ -50,7 +50,7 @@ sample_data = spatial_calibration(analysis_sample);
 distperpix = sample_data.distancePerPixel;
 
 savepath = uigetdir(pwd,'Select folder to save results to')
-beadNum = 32;
+beadNum = 40;
 if sample_data.multibead 
     temp_size = size(sample_data.split);
     n_beads = temp_size(1);
