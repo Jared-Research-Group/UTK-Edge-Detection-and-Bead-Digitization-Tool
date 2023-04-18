@@ -42,7 +42,7 @@ end
 %Read the image from file
 analysis_sample = imread(fullFileName); 
 
-%Turn analysis sample into grayscale image 
+%Turn analysis sample into grayscale image
 analysis_sample =rgb2gray(analysis_sample);
 
 %Apply spatial calibration
@@ -50,7 +50,7 @@ sample_data = spatial_calibration(analysis_sample);
 distperpix = sample_data.distancePerPixel;
 
 savepath = uigetdir(pwd,'Select folder to save results to')
-beadNum = 40;
+beadNum = 26;
 if sample_data.multibead 
     temp_size = size(sample_data.split);
     n_beads = temp_size(1);
@@ -128,22 +128,27 @@ if isempty(find(skelPoints(1,:) == x_min))
 end
 
 %Downsample the line to smooth out unwanted peaks and valleys
-skelPoints = downsample(skelPoints(1,:),skelPoints(2,:),5);
+skelPoints = downsample(skelPoints(1,:),skelPoints(2,:),3);
 skelPoints(1,end) = x_max(1);
 skelPoints(2,end) = y_max;
 skelPoints(1,1) = x_min(1);
 skelPoints(2,1) = y_min;
 
+%Compute cutoffs for start and end points of torch
+travelStart = startPts(beadNum);
+travelEnd = endPts(beadNum);
+
+
 %Use Pchip interpolation to create smooth line running through the
 %downsampled topological skeleton 
 centerLinePoints = [];
-centerLinePoints(1,:) = min(imcoords.x):0.05:max(imcoords.x);
+centerLinePoints(1,:) = travelStart:0.005:travelEnd;
 centerLinePoints(2,:) = pchip(skelPoints(1,:),skelPoints(2,:),centerLinePoints(1,:));
-
 
 %Compute ideal center line 
 [y_ctr,angle] = ideal_centerline(centerLinePoints);
 idealCtrLinePts = [centerLinePoints(1,:);y_ctr];
+disp(size(idealCtrLinePts))
 
 %Calculate transformation matrix and apply transformation to rotate
 %misaligned beads so that ideal center line is parallel to x axis
@@ -172,48 +177,58 @@ endPts = T(1,1)*endPts;
 
 %Plot digitized bead outline
 fig2 = figure
-fig2.Position(3:4) = [1900 400];
+fig2.Position(3:4) = [4000 300];
 scatter(imcoords.x,imcoords.y)
 title('Digitized Bead Outline')
 xlabel('X distance (mm)')
 ylabel('Y distance (mm)')
-
-hold on
-%Plot center line 
+hold on 
 scatter(skelPoints(1,:),skelPoints(2,:));
-hold on
+hold on 
 plot(centerLinePoints(1,:),centerLinePoints(2,:));
-%Plot ideal centerline 
+saveas(fig2,strcat(filepath,' Outline.png'))
+
+fig3 = figure
+set(gcf,'Position',[100 100 4000 300])
+%Plot center line 
+%scatter(skelPoints(1,:),skelPoints(2,:));
+%hold on
+scatter(centerLinePoints(1,:),centerLinePoints(2,:));
+%Plot ideal centerline  
 hold on
 plot(idealCtrLinePts(1,:),idealCtrLinePts(2,:))
-saveas(fig2,strcat(filepath,' Outline+Centerline.png'))
+xlabel('X (mm)')
+ylabel('Y (mm)')
+saveas(fig3,strcat(filepath,' Centerline.png'))
 
 %Get width profile 
 cutoffs(1) = startPts(beadNum);
 cutoffs(2) = endPts(beadNum);
-[Width, start_idx, end_idx] = get_width(cutoffs,centerLinePoints,imcoords);
+Width = get_width(cutoffs,centerLinePoints,imcoords);
 Width = Width.';
-Length = centerLinePoints(1,start_idx:end_idx).';
+Length = centerLinePoints(1,:).';
 
 %Shift length so it starts at 0 
 minLength = min(Length)
 Length = Length - minLength;
 
+Length = Length(10:end);
+Width = Width(10:end);
+
 %Plot width
-fig3 = figure
+fig4 = figure
 plot(Length,Width)
 xlabel('Length (mm)')
 ylabel('Width (mm)')
+fig4.Position(3:4) = [4000 300];
 
 %Compute deviation of actual center line from ideal center line 
 CenterLineDeviation = ctr_line_deviation(centerLinePoints,idealCtrLinePts);
-CenterLineDeviation = CenterLineDeviation(start_idx:end_idx)
-disp(length(CenterLineDeviation))
-disp(length(Width))
-disp(length(Length))
 
-saveas(fig3,strcat(filepath,' Width.png'));
-T = table(Length,Width,CenterLineDeviation.');
+CenterLineDeviation = CenterLineDeviation(10:end).';
+
+saveas(fig4,strcat(filepath,' Width.png'));
+T = table(Length,Width,CenterLineDeviation);
 writetable(T, strcat(filepath, ' Width Profile.csv'))
 
 
@@ -238,94 +253,94 @@ difference = centerLinePoints(2,:) - idealCtrLinePts(2,:);
 
 end
 
-function [width, start_idx, end_idx] = get_width(cutoffs,centerLinePoints,imcoords)
+function width = get_width(cutoffs,centerLinePoints,imcoords)
 
 xq = centerLinePoints(1,:);
 pp = centerLinePoints(2,:);
 
-[minstart, start_idx] = min(abs(xq - cutoffs(1)));
-[minend, end_idx] = min(abs(xq - cutoffs(2)));
+% [minstart, start_idx] = min(abs(xq - cutoffs(1)));
+% [minend, end_idx] = min(abs(xq - cutoffs(2)));
 
 j = 1;
 
-  for i = start_idx:end_idx 
- 
-    diff = imcoords.x - xq(i);
-    [sortedDiff,sortedIdx] = sort(abs(diff));
-    xmin = sortedDiff(1);
-    first_idx = sortedIdx(1);
-    idx = find(imcoords.x == imcoords.x(first_idx));
+for i = 1:length(xq)
+
+diff = imcoords.x - xq(i);
+[sortedDiff,sortedIdx] = sort(abs(diff));
+xmin = sortedDiff(1);
+first_idx = sortedIdx(1);
+idx = find(imcoords.x == imcoords.x(first_idx));
+
+%Boolean that stores info on whether current index is above or below
+%centerline. Above is true, below is false 
+
+if length(idx) > 2
+
+    yvals = imcoords.y(idx);
+    yhighsidx = find(yvals > pp(i));
+    ylowsidx = find(yvals < pp(i));
+
+    yhighs = yvals(yhighsidx)
+    newyhigh = min(yhighs)
+    newhighidx = find(yvals == newyhigh)
+
+    ylows = yvals(ylowsidx)
+    newylow = max(ylows)
+    newlowidx = find(yvals == newylow)
     
-    %Boolean that stores info on whether current index is above or below
-    %centerline. Above is true, below is false 
+    idx = [idx(newhighidx) idx(newlowidx)]
+
+end
+
+for n = 1:length(idx)
+
+    direction = false;
+    if imcoords.y(idx(n)) > pp(i)
+        y_high(j) = imcoords.y(idx(n));
+        direction = true;
+    elseif imcoords.y(idx(n)) < pp(i)
+        y_low(j) = imcoords.y(idx(n));
+    end
     
-    if length(idx) > 2
+    found = false;
 
-        yvals = imcoords.y(idx);
-        yhighsidx = find(yvals > pp(i));
-        ylowsidx = find(yvals < pp(i));
-
-        yhighs = yvals(yhighsidx)
-        newyhigh = min(yhighs)
-        newhighidx = find(yvals == newyhigh)
-
-        ylows = yvals(ylowsidx)
-        newylow = max(ylows)
-        newlowidx = find(yvals == newylow)
-        
-        idx = [idx(newhighidx) idx(newlowidx)]
- 
+    if length(idx) > 1
+        found = true;
     end
 
-    for n = 1:length(idx)
+    newDirection = false;
+    k = 2;
 
-        direction = false;
-        if imcoords.y(idx(n)) > pp(i)
-            y_high(j) = imcoords.y(idx(n));
-            direction = true;
-        elseif imcoords.y(idx(n)) < pp(i)
-            y_low(j) = imcoords.y(idx(n));
+    while (found == false)
+
+        second_idx = sortedIdx(k);
+        testValY = imcoords.y(second_idx);
+
+        if (testValY > pp(i))
+            newDirection = true;
+        else
+            newDirection = false;
         end
-        
-        found = false;
 
-        if length(idx) > 1
+        if (direction ~= newDirection)
             found = true;
         end
 
-        newDirection = false;
-        k = 2;
-    
-        while (found == false)
-    
-            second_idx = sortedIdx(k);
-            testValY = imcoords.y(second_idx);
-    
-            if (testValY > pp(i))
-                newDirection = true;
-            else
-                newDirection = false;
-            end
-    
-            if (direction ~= newDirection)
-                found = true;
-            end
-    
-            k = k + 1;
-    
-        end
-    
-        if newDirection && length(idx) == 1 
-            y_high(j) = testValY;
-            j = j + 1;
-        elseif newDirection == false && length(idx) == 1
-            y_low(j) = testValY;
-            j = j + 1;
-        elseif n == 2
-            j = j + 1;
-        end
+        k = k + 1;
 
     end
+
+    if newDirection && length(idx) == 1 
+        y_high(j) = testValY;
+        j = j + 1;
+    elseif newDirection == false && length(idx) == 1
+        y_low(j) = testValY;
+        j = j + 1;
+    elseif n == 2
+        j = j + 1;
+    end
+
+end
 
 
 %     for k = 1:length(idx)
